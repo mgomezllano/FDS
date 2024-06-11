@@ -1,7 +1,7 @@
 
 pacman::p_load(tidyverse, metafor, ggplot2, plyr, latex2exp, dplyr, orchaRd, 
                brms, rotl, ape, phytools, readxl, MuMIn, esc, kittyR, gridExtra,
-               ggtree)
+               ggtree, tidybayes)
 
 setwd("~/Library/CloudStorage/Dropbox/FreqDep_Selection/Code")
 
@@ -23,6 +23,35 @@ length(unique(Da$Paper_ID))
 nrow(Da)
 
 Da$obs <- seq(1, nrow(Da))
+
+# Create variable with effect sizes (Gs) that do not overlap 0 (Sig) and those who do not (NS)
+
+minGs <- Da$Gs-Da$Var_Gs
+maxGs <- Da$Gs+Da$Var_Gs
+
+posneg <- maxGs*minGs
+
+magn <- rep(NA, nrow(Da))
+
+for(i in 1:nrow(Da)){
+  if(posneg[i] < 0){
+    magn[i] <- "NS" 
+  } else {
+    magn[i] <- "Sig"
+  }
+}
+
+Da$magn <- magn
+
+neg <- Da[which(Da$Gs<0),]
+pos <- Da[which(Da$Gs>0),]
+
+# ddply(neg, .(magn), summarise, n = length(Gs))
+# ddply(pos, .(magn), summarise, n = length(Gs))
+# 
+# 242/nrow(Da) # perc negative
+# 181/nrow(Da) # perc positive
+# (nrow(Da)-(242+181))/nrow(Da) # Perc non-sig
 
 ####################################################################
 ########################  DATA BIASES ##############################
@@ -57,7 +86,7 @@ res.SE <- rma.mv(Gs, V = Var_Gs,
                    random = list(~1|Paper_ID,
                                  ~1|obs,
                                  ~1|species), 
-                   data = Da2)
+                   data = Da)
 
 summary(res.SE)
 
@@ -94,6 +123,7 @@ res <- rma.mv(Gs, V = Var_Gs,
 summary(res)
 
 ################### PHYLOGENETIC
+
 # # prune tree
 Da <- Da %>%
   mutate(species2 = species)
@@ -122,32 +152,90 @@ AICc(res, resPhylo) # Phylogenetic model has lower AIC
 
 i2_ml(resPhylo)
 
+# Absolute mean effects
+
+formula <- Gs|se(sqrt(Var_Gs)) ~ 1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+intercept <- fit_model(formula)
+
+# Folded normal distribution
+sa <- tidybayes::tidy_draws(intercept)
+mu <- sa$b_Intercept
+sed <- sd(sa$b_Intercept)
+postfnorm <- stats::dnorm(mu, 0, sed)*2*(sed^2) + mu*(2*stats::pnorm(mu, 0, sed) -1)
+mean_mpg <- mean(postfnorm)
+se_mpg <- sd(postfnorm) / sqrt(length(postfnorm))
+
+ci <- median_qi(postfnorm, .width = 0.95)
+mod_table <- data.frame(mean_mpg, ci[2:3])
+colnames(mod_table) <- c("mean", "lower", "upper")
+
+pres <- 1/sqrt(Da2$Var_Gs)
+Das <- data.frame(Da2$Gs, pres, Da2$magn)
+Das$inter <- 'Intercept'
+
 ### FIGURE 1
 
-mod_res <- mod_results(res, mod = "1", at = NULL,  group = "Paper_ID")
-mod_res
-
-f1B <- orchard_plot(mod_res, mod="1", xlab = "Hedge's g", condition.lab = "Intercept",
-                   k.pos = 2, g = F,
-                   trunk.size = 10, branch.size = 1.5, twig.size = 0.3) +
-  scale_y_continuous(limits = c(-2.5, 2.5)) +
-  scale_fill_manual(values="grey40") +
-  scale_colour_manual(values="grey40") +
-  xlab('Intercept') +
-  annotate('text', label = 'B', y = -2.5, x = 1.5, size = 7)
+f1C <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das, aes(y = abs(Da2.Gs), inter, shape = Da2.magn, size = pres),
+                               col = "grey40", alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_table, aes(x = 1, y = mean), col = 'black', size = 4) +
+  geom_linerange(data = mod_table, aes(x = 1, ymin = lower, ymax = upper), linewidth = 1.5) +
+  scale_y_continuous(limits = c(0, 3.5)) +
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = c(0.6, 0.1),
+        legend.direction = 'horizontal',
+        legend.background = element_blank(),
+        legend.spacing.y = unit(-0.2, "cm"),
+        legend.spacing.x = unit(0.05, 'cm'),
+        axis.text.y = element_text(angle = 90, hjust = 0.5, size = 12)) +
+  annotate('text', label = 'B', y = 0.3, x = 1.55, size = 7) +
+  annotate('text', label = 'K = 745', y = 2.8, x = 1.35, size = 4)
 
 mod_res2 <- mod_results(resPhylo, mod = "1", at = NULL,  group = "Paper_ID")
 mod_res2
 
-f1C <- orchard_plot(mod_res2, mod="1", xlab = "Hedge's g",
-                   k.pos = 2, g = F,
-                   trunk.size = 10, branch.size = 1.5, twig.size = 0.3) +
+mod_table2 <- mod_res2$mod_table
+mod_table2[1] <- "Intercept"
+
+pres <- 1/sqrt(Da2$Var_Gs)
+
+Das2 <- data.frame(Da2$Gs, pres, Da2$magn)
+Das2$inter <- 'Intercept'
+
+f1B <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, inter, shape = Da2.magn, size = pres),
+                               col = "grey40", alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_table2, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_table2, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
   scale_y_continuous(limits = c(-2.5, 2.5)) +
-  scale_fill_manual(values="grey40") +
-  scale_colour_manual(values="grey40") + xlab('Intercept') +
-  annotate('text', label = 'C', y = -2.5, x = 1.5, size = 7)
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = c(0.7, 0.1),
+        legend.direction = 'horizontal',
+        legend.background = element_blank(),
+        legend.spacing.y = unit(-0.2, "cm"),
+        legend.spacing.x = unit(0.05, 'cm'),
+        axis.text.y = element_text(angle = 90, hjust = 0.5, size = 12)) +
+  annotate('text', label = 'C', y = -2.2, x = 1.5, size = 7) +
+  annotate('text', label = 'K = 745', y = 1.5, x = 1.3, size = 4)
 
 p1 <- grid.arrange(f1B, f1C, ncol = 1)
+
+pdf("f1a.pdf", width = 5, height = 9)
+grid.arrange(f1B, f1C, ncol = 1)
+dev.off()
 
 ###
 Kingdom <- Da2$Kingdom
@@ -170,16 +258,6 @@ dev.off()
 ########################  MODERATORS ###############################
 ####################################################################
 
-################### METHODOLOGY
-
-# res.Method <- rma.mv(Gs, V = Var_Gs,
-#                      mods = ~ Method - 1,
-#                      random = list(~1|Paper_ID, 
-#                                    ~1|obs, 
-#                                    ~1|species),
-#                      data = Da)
-# summary(res.Method)
-
 resPhyloM <- rma.mv(Gs, V = Var_Gs,
                    mods = ~ Method - 1,
                    random = list(~1|Paper_ID,
@@ -192,67 +270,27 @@ resPhyloM <- rma.mv(Gs, V = Var_Gs,
 summary(resPhyloM)
 
 # Figure methods
-fmeth <- orchard_plot(resPhyloM, mod = "Method", group = "Method", 
-             xlab = "Hedges' g", g = F, angle = 0,
-             trunk.size = 10, branch.size = 1.5, twig.size = 0.3,  
-             k.pos = c(2, 0.5, 1)) +
+mod_meth <- mod_results(resPhyloM, mod = "Method", at = NULL,  group = "Paper_ID")
+mod_meth <- mod_meth$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$Method, pres, Da2$magn)
+
+fmeth <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.Method, col = Da2.Method,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_meth, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_meth, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
   scale_y_continuous(limits = c(-2.5, 2.5)) +
-  annotate('text', label = 'A', y = -2.3, x = 4.3, size = 7)
-
-
-################### MINIMUM FREQUENCY
-
-# Minimum frequency
-# res.Min <- rma.mv(Gs, V = Var_Gs,
-#                   mods = ~ min_freq,
-#                   random = list(~1|Paper_ID, 
-#                                 ~1|obs, 
-#                                 ~1|species),
-#                   data = Da)
-# 
-# summary(res.Min)
-# 
-resPhyloMin <- rma.mv(Gs, V = Var_Gs,
-                    mods = ~ min_freq,
-                    random = list(~1|Paper_ID,
-                                  ~1|obs,
-                                  ~1|species, # non-phylogenetic
-                                  ~1|species2), # phylogenetic
-                    test = 't', method = 'REML',
-                    R = list(species2 = phylogeny), data = Da2)
-
-summary(resPhyloMin)
-
-fmin <- ggplot(data = Da2, aes(x = min_freq, y = Gs)) +
-  geom_point(aes(size = 1/sqrt(Var_Gs)), col = "#54278f", alpha = 0.4) +
-  geom_abline(intercept = resPhyloMin$b[1], slope = resPhyloMin$b[2]) +
-  geom_abline(intercept = resPhyloMin$b[1] + resPhyloMin$se[1],
-              slope = resPhyloMin$b[2] + resPhyloMin$se[2], lty = 2) +
-  geom_abline(intercept = resPhyloMin$b[1] - resPhyloMin$se[1],
-              slope = resPhyloMin$b[2] - resPhyloMin$se[2], lty = 2) +
-  xlab("Minimum frequency") + ylab("Hedges' g") + theme_bw() +
-  labs(size = TeX("Precision $\\left(\\frac{1}{\\SE}\\right)$")) +
-  theme(legend.position = c(.6, 0.9),
-        legend.direction = 'horizontal',
-        text = element_text(size = 11)) +
-  annotate('text', label = 'B', y = 14.5, x = 0.01, size = 7)
-
-
-pdf("f2.pdf", width = 10, height = 7)
-grid.arrange(fmeth, fmin, ncol = 2)
-dev.off()
-
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
 
  ################### SEX
-
-# res.Sex <- rma.mv(Gs, V = Var_Gs,
-#                   mods = ~Sex-1,
-#                   random = list(~1|Paper_ID, 
-#                                 ~1|obs, 
-#                                 ~1|species),
-#                   data = Da)
-# 
-# summary(res.Sex)
 
 resPhyloS <- rma.mv(Gs, V = Var_Gs,
                     mods = ~Sex-1,
@@ -266,23 +304,32 @@ resPhyloS <- rma.mv(Gs, V = Var_Gs,
 summary(resPhyloS)
 
 # Figure sex
-fsex <- orchard_plot(resPhyloS, mod = "Sex", group = "Sex", 
-             xlab = "Hedges' g", g = F, twig.size = 0.3,  angle = 0,
-             trunk.size = 10, branch.size = 1.5, k.pos = c(2, 0.5, 1)) +
+mod_sex <- mod_results(resPhyloS, mod = "Sex", at = NULL,  group = "Paper_ID")
+mod_sex <- mod_sex$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$Sex, pres, Da2$magn)
+
+fsex <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.Sex, col = Da2.Sex,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_sex, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_sex, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
   scale_y_continuous(limits = c(-2.5, 2.5)) +
-  annotate('text', label = 'A', y = -2.3, x = 5.3, size = 7)
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
+
+pdf("f2.pdf", width = 10, height = 7)
+grid.arrange(fmeth, fsex, ncol = 2)
+dev.off()
 
 
 ################### TRAIT
-
-# res.Trait <- rma.mv(Gs, V = Var_Gs,
-#                     mods = ~ Trait_class - 1,
-#                     random = list(~1|Paper_ID, 
-#                                   ~1|obs, 
-#                                   ~1|species),
-#                     data = Da)
-# 
-# summary(res.Trait)
 
 resPhyloT <- rma.mv(Gs, V = Var_Gs,
                     mods = ~ Trait_class-1,
@@ -296,28 +343,27 @@ resPhyloT <- rma.mv(Gs, V = Var_Gs,
 summary(resPhyloT)
 
 # Figure trait
-ftrait <- orchard_plot(resPhyloT, mod = "Trait_class", group = "Trait_class", 
-             xlab = "Hedges' g", g = F, angle = 0,
-             trunk.size = 10, branch.size = 1.5, k.pos = c(2, 0.5, 1),
-             twig.size = 0.3) +
-  scale_y_continuous(limits = c(-3.5, 2.5)) +
-  annotate('text', label = 'B', y = -3.3, x = 7.25, size = 7)
+mod_trait <- mod_results(resPhyloT, mod = "Trait_class", at = NULL,  group = "Paper_ID")
+mod_trait <- mod_trait$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$Trait_class, pres, Da2$magn)
 
-pdf("f3.pdf", height = 8, width = 10)
-grid.arrange(fsex, ftrait, nrow = 1)
-dev.off()
-
+ftrait <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.Trait_class, col = Da2.Trait_class,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_trait, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_trait, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
+  scale_y_continuous(limits = c(-3.5, 3.5)) +
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
 
 ################### FITNESS
-
-# res.Fitness <- rma.mv(Gs, V = Var_Gs,
-#                       mods = ~Fitness_class - 1,
-#                       random = list(~1|Paper_ID, 
-#                                     ~1|obs, 
-#                                     ~1|species),
-#                       data = Da)
-# 
-# summary(res.Fitness)
 
 resPhyloF <- rma.mv(Gs, V = Var_Gs,
                     mods = ~ Fitness_class-1,
@@ -331,22 +377,27 @@ resPhyloF <- rma.mv(Gs, V = Var_Gs,
 summary(resPhyloF)
 
 # Figure fitness
-ffit <- orchard_plot(resPhyloF, mod = "Fitness_class", group = "Fitness_class", 
-             xlab = "Hedges' g", g = F, twig.size = 0.3,  angle = 0,
-             trunk.size = 10, branch.size = 1.5, k.pos = c(2, 0.5, 1)) +
+mod_fit <- mod_results(resPhyloF, mod = "Fitness_class", at = NULL,  group = "Paper_ID")
+mod_fit <- mod_fit$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$Fitness_class, pres, Da2$magn)
+
+ffit <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.Fitness_class, col = Da2.Fitness_class,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_fit, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_fit, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
   scale_y_continuous(limits = c(-2.5, 2.5)) +
-  annotate('text', label = 'A', y = -2.35, x = 3.45, size = 7)
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
 
 ################### BIOTIC INTERACTION
-
-# res.Interaction <- rma.mv(Gs, V = Var_Gs,
-#                           mods = ~ biol_interaction - 1,
-#                           random = list(~1|Paper_ID, 
-#                                         ~1|obs, 
-#                                         ~1|species),
-#                           data = Da)
-# 
-# summary(res.Interaction)
 
 resPhyloI <- rma.mv(Gs, V = Var_Gs,
                     mods = ~ biol_interaction-1,
@@ -360,14 +411,28 @@ resPhyloI <- rma.mv(Gs, V = Var_Gs,
 summary(resPhyloI)
 
 # Figure biological interaction
-fint <- orchard_plot(resPhyloI, mod = "biol_interaction", group = "biol_interaction", 
-             xlab = "Hedges' g", g = F, twig.size = 0.3,  angle = 0,
-             trunk.size = 10, branch.size = 1.5, k.pos = c(2, 0.5, 1)) +
-  scale_y_continuous(limits = c(-2.5, 2.5)) +
-  annotate('text', label = 'B', y = -2.3, x = 6.3, size = 7)
+mod_int <- mod_results(resPhyloI, mod = "biol_interaction", at = NULL,  group = "Paper_ID")
+mod_int <- mod_int$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$biol_interaction, pres, Da2$magn)
 
-pdf("f4.pdf", height = 8, width = 10)
-grid.arrange(ffit, fint, nrow = 1, widths = c(0.9, 1.1))
+fint <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.biol_interaction, col = Da2.biol_interaction,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_int, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_int, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
+  scale_y_continuous(limits = c(-2.5, 2.5)) +
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
+
+pdf("f3.pdf", height = 8, width = 13)
+grid.arrange(ftrait, ffit, fint, nrow = 1, widths = c(0.9, 0.9, 1.1))
 dev.off()
 
 #########################################################
@@ -426,29 +491,39 @@ res.KingP <- rma.mv(Gs, V = Var_Gs,
 summary(res.KingP)
 
 # # Figure class
-fking <- orchard_plot(res.KingP, mod = "Kingdom", group = "Kingdom",
-                       xlab = "Hedges' g", g = F, twig.size = 0.3,  angle = 0,
-                       trunk.size = 10, branch.size = 1.5, k.pos = c(-5, 0.5, 1)) +
-  scale_y_continuous(limits = c(-6, 2.5)) 
+mod_king <- mod_results(res.KingP, mod = "Kingdom", at = NULL,  group = "Paper_ID")
+mod_king <- mod_king$mod_table
+Das2 <- data.frame(Da2$Gs, Da2$Kingdom, pres, Da2$magn)
 
+fking <- ggplot() +
+  ggbeeswarm::geom_quasirandom(data = Das2, aes(y = Da2.Gs, x = Da2.Kingdom, col = Da2.Kingdom,
+                                                shape = Da2.magn, size = pres),
+                               alpha = 0.5, width = 0.5) +
+  scale_shape_manual('Significance', values = c(1, 19)) +
+  guides(shape = guide_legend(override.aes = list(size = 3)))  +
+  geom_point(data = mod_king, aes(x = name, y = estimate), col = 'black', size = 4) +
+  geom_linerange(data = mod_king, aes(x = name, ymin = lowerCL, ymax = upperCL), linewidth = 1.5) +
+  scale_y_continuous(limits = c(-6, 2.5)) +
+  theme_bw() + coord_flip() +
+  theme(axis.text = element_text(size = 10, colour = "black", hjust = 0.5)) +
+  xlab('') + ylab("Hedge's g") +
+  scale_size_continuous("Precision (1/SE)") +
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'grey40') +
+  theme(legend.position = 'none') 
 
 pdf("fS3.pdf", height = 10, width = 8)
 fking
 dev.off()
 
-################### FREQUENCY * METHOD
+# Absolute effect size
+formula <- Gs|se(sqrt(Var_Gs)) ~ Kingdom-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+king <- fit_model(formula)
 
-resPhyloMM <- rma.mv(Gs, V = Var_Gs,
-                     mods = ~ min_freq * Method-1,
-                     random = list(~1|Paper_ID,
-                                   ~1|obs,
-                                   ~1|species, # non-phylogenetic
-                                   ~1|species2), # phylogenetic
-                     test = 't', method = 'REML',
-                     R = list(species2 = phylogeny), data = Da2)
-
-summary(resPhyloMM)
-
+sa <- tidybayes::tidy_draws(king)
+res1 <- fold(sa, nlevs = length(unique(Da2$Kingdom))-1, colu = length(unique(Da2$Kingdom)))
+res1$groups <- sort(unique(Da2$Kingdom))
+res1
 ################### SEX * METHOD
 
 Da2$Sex <- relevel(Da2$Sex, ref = 'Both')
@@ -464,8 +539,112 @@ resPhyloMS <- rma.mv(Gs, V = Var_Gs,
 
 summary(resPhyloMS)
 
+############# ABSOLUTE EFFECT SIZES
 
+# METHOD
+formula <- Gs|se(sqrt(Var_Gs)) ~ Method-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+method <- fit_model(formula)
 
+sa <- tidybayes::tidy_draws(method)
+res1 <- fold(sa, nlevs = length(unique(Da2$Method))-1, colu = length(unique(Da2$Fitness_class)))
+res1$groups <- sort(unique(Da2$Method))
+res1
 
+# SEX
+formula <- Gs|se(sqrt(Var_Gs)) ~ Sex-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+sex <- fit_model(formula)
 
+sa <- tidybayes::tidy_draws(sex)
+res2 <- fold(sa, nlevs = length(unique(Da2$Sex))-1, colu = length(unique(Da2$Fitness_class)))
+res2$groups <- sort(unique(Da2$Sex))
+res2
 
+# TRAIT
+formula <- Gs|se(sqrt(Var_Gs)) ~ Trait_class-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+trait <- fit_model(formula)
+
+sa <- tidybayes::tidy_draws(trait)
+res3 <- fold(sa, nlevs = length(unique(Da2$Trait_class))-1)
+res3$groups <- sort(unique(Da2$Trait_class))
+res3
+
+# FITNESS
+formula <- Gs|se(sqrt(Var_Gs)) ~ Fitness_class-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+fitness <- fit_model(formula)
+
+sa <- tidybayes::tidy_draws(fitness)
+res4 <- fold(sa, nlevs = length(unique(Da2$Fitness_class))-1, colu = length(unique(Da2$Fitness_class)))
+res4$groups <- sort(unique(Da2$Fitness_class))
+res4
+
+# INTERACTION
+formula <- Gs|se(sqrt(Var_Gs)) ~ biol_interaction-1 + 
+  (1|Paper_ID) + (1|obs) + (1|species) + (1|gr(species2, cov = phylogeny))
+inter <- fit_model(formula)
+
+sa <- tidybayes::tidy_draws(inter)
+res5 <- fold(sa, nlevs = length(unique(Da2$biol_interaction))-1, colu = length(unique(Da2$Fitness_class)))
+res5$groups <- sort(unique(Da2$biol_interaction))
+res5
+
+################################
+## Non-phylo
+
+# Method
+resM <- rma.mv(Gs, V = Var_Gs,
+                    mods = ~ Method - 1,
+                    random = list(~1|Paper_ID,
+                                  ~1|obs,
+                                  ~1|species), # non-phylogenetic
+                    test = 't', method = 'REML',
+                    data = Da2)
+
+summary(resM)
+
+# Sex
+resS <- rma.mv(Gs, V = Var_Gs,
+                    mods = ~Sex-1,
+                    random = list(~1|Paper_ID,
+                                  ~1|obs,
+                                  ~1|species), # non-phylogenetic
+                    test = 't', method = 'REML',
+                    data = Da2)
+
+summary(resS)
+
+# Trait
+resT <- rma.mv(Gs, V = Var_Gs,
+                    mods = ~ Trait_class-1,
+                    random = list(~1|Paper_ID,
+                                  ~1|obs,
+                                  ~1|species), # non-phylogenetic
+                    test = 't', method = 'REML',
+                    data = Da2)
+
+summary(resT)
+
+# Fitness
+resF <- rma.mv(Gs, V = Var_Gs,
+                    mods = ~ Fitness_class-1,
+                    random = list(~1|Paper_ID,
+                                  ~1|obs,
+                                  ~1|species), # non-phylogenetic
+                    test = 't', method = 'REML',
+                    data = Da2)
+
+summary(resF)
+
+# Interaction
+resI <- rma.mv(Gs, V = Var_Gs,
+                    mods = ~ biol_interaction-1,
+                    random = list(~1|Paper_ID,
+                                  ~1|obs,
+                                  ~1|species), # non-phylogenetic
+                    test = 't', method = 'REML',
+                    data = Da2)
+
+summary(resI)
