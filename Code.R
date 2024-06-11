@@ -3,8 +3,6 @@ pacman::p_load(tidyverse, metafor, ggplot2, plyr, latex2exp, dplyr, orchaRd,
                brms, rotl, ape, phytools, readxl, MuMIn, esc, kittyR, gridExtra,
                ggtree, tidybayes)
 
-setwd("~/Library/CloudStorage/Dropbox/FreqDep_Selection/Code")
-
 # Get the data
 
 pretty <- theme(axis.text = element_text(colour = 'black'),
