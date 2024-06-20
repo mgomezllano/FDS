@@ -3,7 +3,44 @@ pacman::p_load(tidyverse, metafor, ggplot2, plyr, latex2exp, dplyr, orchaRd,
                brms, rotl, ape, phytools, readxl, MuMIn, esc, kittyR, gridExtra,
                ggtree, tidybayes)
 
-# Get the data
+#################################################################################
+# FUNCTIONS (for folded normal distribution)
+
+# Bayesian
+fit_model <- function(formula){
+  model <- brm(formula, 
+               data = Da2,
+               data2 = list(phylogeny = phylogeny),
+               control = list(adapt_delta = 0.95),
+               chains = 4, cores = 4)  
+  return(model)
+}
+
+# Folded normal distribution
+fold <- function(data, nlevs, colu){
+  nl <- 4+nlevs
+  ma <- data.frame(sa[, 4:nl])
+  seds <- apply(ma, 2, sd)
+  mean_mpg <- rep(0, colu)
+  lower <- mean_mpg <- rep(0, colu)
+  upper <- mean_mpg <- rep(0, colu)
+  
+  for(i in 1:ncol(ma)){
+    ma2 <- as.numeric(ma[, i])
+    postfnorm <- stats::dnorm(ma2, 0, seds[i])*2*(seds[i]^2) + ma2*(2*stats::pnorm(ma2, 0, seds[i]) -1)
+    mean_mpg[i] <- mean(postfnorm)
+    lower[i] <- median_qi(postfnorm, .width = 0.95)[,2]
+    upper[i] <- median_qi(postfnorm, .width = 0.95)[,3]
+  }
+  
+  res <- data.frame(mean_mpg, lower, upper)
+  colnames(res) <- c("mean", "lower", "upper")
+  return(res)
+}
+
+#################################################################################
+
+# Figures aesthetics
 
 pretty <- theme(axis.text = element_text(colour = 'black'),
                 axis.line = element_line(colour = "black"),
@@ -11,6 +48,7 @@ pretty <- theme(axis.text = element_text(colour = 'black'),
                 legend.title = element_blank(),
                 text = element_text(size = 13))
 
+#################################################################################
 Da <- read.csv('Data_FDS.csv')
 Da$biol_interaction <- factor(Da$biol_interaction)
 Da$Sex <- factor(Da$Sex)
@@ -22,7 +60,7 @@ nrow(Da)
 
 Da$obs <- seq(1, nrow(Da))
 
-# Create variable with effect sizes (Gs) that do not overlap 0 (Sig) and those who do not (NS)
+# Create variable with effect sizes (Gs) that do not overlap 0 (Significant) and those who do not (Non-Sig)
 
 minGs <- Da$Gs-Da$Var_Gs
 maxGs <- Da$Gs+Da$Var_Gs
@@ -104,10 +142,6 @@ dev.off()
 ####################################################################
 ######################  OVERALL EFFECTS ############################
 ####################################################################
-
-# First I ran the general model with only the intercept. Selection is 
-# mostly negative but not statistically different from 0. The model including 
-# the phylogeny fits the data a bit better. 
 
 ################### OVERALL
 
@@ -231,9 +265,9 @@ f1B <- ggplot() +
 
 p1 <- grid.arrange(f1B, f1C, ncol = 1)
 
-pdf("f1a.pdf", width = 5, height = 9)
-grid.arrange(f1B, f1C, ncol = 1)
-dev.off()
+# pdf("f1a.pdf", width = 5, height = 9)
+# grid.arrange(f1B, f1C, ncol = 1)
+# dev.off()
 
 ###
 Kingdom <- Da2$Kingdom
@@ -467,15 +501,6 @@ model1.1_refit <- rma.mv(Gs, V = Var_Gs,
 summary(model1.1_refit)
 
 ################### KINGDOM
-
-# res.King <- rma.mv(Gs, V = Var_Gs,
-#                   mods = ~ Kingdom-1,
-#                   random = list(~1|Paper_ID, 
-#                                 ~1|obs, 
-#                                 ~1|species),
-#                   data = Da)
-# 
-# summary(res.King)
 # 
 res.KingP <- rma.mv(Gs, V = Var_Gs,
                      mods = ~Kingdom-1,
