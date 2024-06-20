@@ -1,0 +1,39 @@
+﻿Variable,
+Paper ID,Paper identification number
+Fitness,Measure of fitness used in the study
+Fitness_class,"Fecundity, sexual or viability"
+Trait,Trait studied
+Trait_class,"Grouped traits (e.g., morphology, behaviour)"
+biol_interaction,"Ecological interaction (e.g., parasitism, predation)"
+Trait.variant,The vairant in which fitness was measured
+Sex,Sex
+Group_factor,Grouping used in the study
+Year,Year in which data was collected
+Density,Density manipulations
+Grouping_2,Grouping used in the study
+Grouping_3,Grouping used in the study
+Treatment,Treatment used in the study
+min_freq,Minimum frequency studied
+max_freq,maximum frequency studied
+freq_range,Range of frequencies studied
+Lab_Field,Study in laboratory or in the field
+Method,"Methododlogical setting (e.g., lab, field experiment, field observation)"
+Kingdom,Kingdom
+Class,Class
+Order,Order
+Phylum,Phylum
+Genus,Genus
+Species,Species
+d,Cohen's d
+var_d,Variance of cohen's d
+total_n,sample size
+Researcher,Researcher who collected the effect sizes
+Authors,Publication authors
+Title,Publication title
+Journal,Journal
+Year,Publication year
+Source,"Database, web of science (WoS)"
+species,species
+Gs,Hedge's g
+Var_Gs,Variance in Hedge's g
+species2,species
